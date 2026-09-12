@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <vector>
-#include <thread>
 #include <cstring>
 #include <experimental/simd> //17?
 // Starter Grid for the 2D heat-diffusion problem.
@@ -17,6 +16,7 @@ class Grid {
 private:
   std::size_t rows_;
   std::size_t cols_;
+  std::size_t padded_cols_;
 
   //flat
   std::vector<double> data_;
@@ -73,8 +73,8 @@ void apply_stencil(const Grid& old_grid, Grid& new_grid) {
   const V v_half(0.5); //current cell
   const V v_eighth(0.125); //surrounding four
 
-  auto worker = [&](std::size_t begin, std::size_t end){ //wrap in a lambda to thread it
-    for (std::size_t i = 1; i < rows -1; ++i) {
+#pragma omp parallel for schedule(static) //cmake 18-21
+    for (std::ptrdiff_t i = 1; i < static_cast<std::ptrdiff_t>(rows) - 1; ++i) {
       //calculate where the row starts
       std::size_t row_start = i * cols;
       std::size_t top_start = (i-1) * cols;
@@ -102,28 +102,4 @@ void apply_stencil(const Grid& old_grid, Grid& new_grid) {
       //rightmost
       dst[row_start + cols -1] = src[row_start + cols-1];
     }
-  };
-  const std::size_t thread_count =4;
-  std::size_t workers = thread_count;
-  const std::size_t interior_rows = rows-2; //dont over allocate thraed compared to work needed without top + bottom
-  if (interior_rows < workers)
-    workers = interior_rows;
-
-  std::vector<std::thread> threads;
-  threads.reserve(workers);
-
-  const std::size_t rows_per_thread =
-    interior_rows / workers;
-
-  std::size_t begin =1;
-  //starting main loop thru threads
-  for (std::size_t t = 0; t < workers; t++) {
-    const std::size_t extra = t < interior_rows % workers ? 1 : 0; //allocate extras to the first threads
-    const std::size_t end = begin + rows_per_thread + extra; //eg 10 IR with 4 thread becomes 3-3-2-2
-    std::thread thread(worker, begin, end); //create
-    threads.push_back(std::move(thread)); //into vector
-    begin = end; //next rows 4 next thread
-  }
-  for (auto& t : threads)
-    t.join();
 }
