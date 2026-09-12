@@ -2,9 +2,8 @@
 
 #include <cstddef>
 #include <vector>
+#include <thread>
 #include <cstring>
-#include <cstdlib>
-#include <mm_malloc.h> //portability, couldn't align with std::aligned_alloc coz windows or smth
 #include <experimental/simd> //17?
 // Starter Grid for the 2D heat-diffusion problem.
 //
@@ -18,62 +17,36 @@ class Grid {
 private:
   std::size_t rows_;
   std::size_t cols_;
-  std::size_t stride_;
 
-  static constexpr std::size_t ALIGNMENT = 64; // assumption, to change as needed
   //flat
-  double* data_ = nullptr;
-
-  // Helper to calculate padded stride
-  static std::size_t calculate_stride(std::size_t cols) {
-    // Round up cols to next multiple of 8 doubles (64 bytes)
-    return (cols + 7) & ~std::size_t(7);
-  }
-
-
+  std::vector<double> data_;
 
 public:
   Grid(std::size_t rows, std::size_t cols):
-  rows_(rows), cols_(cols), stride_(calculate_stride(cols)) {
-    std::size_t bytes = rows * stride_ * sizeof(double);
-    data_ = static_cast<double*>(_mm_malloc(bytes, ALIGNMENT));
-  }
+  rows_(rows), cols_(cols), data_(rows*cols,0.0) {}
 
   Grid(const Grid&) = delete;
   Grid& operator=(const Grid&) = delete;
 
   //move over copy
-  Grid(Grid&&other) noexcept : rows_(other.rows_), cols_(other.cols_), stride_(other.stride_), data_(other.data_) {
-    other.data_ = nullptr;
-  }
-  Grid& operator=(Grid&& other) noexcept {
-    if (this != &other) {
-      _mm_free(data_);
-      rows_ = other.rows_;
-      cols_ = other.cols_;
-      stride_ = other.stride_;
-      data_ = other.data_;
-      other.data_ = nullptr;
-    }
-    return *this;
-}
+  Grid(Grid&&other) noexcept = default;
+  Grid& operator=(Grid&& other) noexcept = default;
 
-  ~Grid() {_mm_free(data_);}
+  ~Grid() = default;
 
 
   double& operator()(std::size_t i, std::size_t j) {
-    return data_[i*stride_ +j];
+    return data_[i*cols_ +j];
   }
   double  operator()(std::size_t i, std::size_t j) const {
-    return data_[i*stride_ +j];
+    return data_[i*cols_ +j];
   }
 
   std::size_t rows() const { return rows_; }
   std::size_t cols() const { return cols_; }
-  std::size_t stride() const { return stride_;}
 
   double* data() { return &data_[0]; }
-  const double* data() const { return &data_[0]; }//ptr to start
+  const double* data() const { return &data_[0]; }
 };  
 
 // Apply the five-point stencil over all interior points, copying the boundary
@@ -81,10 +54,9 @@ public:
 void apply_stencil(const Grid& old_grid, Grid& new_grid) {
   const std::size_t rows = old_grid.rows();
   const std::size_t cols = old_grid.cols();
-  const std::size_t stride = old_grid.stride();
   //edge case for a grid with only boundaries
   if (rows <= 2 || cols <= 2) {
-    std::memcpy(new_grid.data(), old_grid.data(), rows*stride*sizeof(double));
+    std::memcpy(new_grid.data(), old_grid.data(), rows*cols*sizeof(double));
     return;
   }
   //unique location
@@ -93,45 +65,41 @@ void apply_stencil(const Grid& old_grid, Grid& new_grid) {
 
   //copy boundaries(top/bottom)
   std::memcpy(dst,src, cols*sizeof(double)); //index 0
-  std::memcpy(dst + (rows-1) * stride, src + (rows-1)*stride,cols*sizeof(double));
+  std::memcpy(dst + (rows-1) * cols, src + (rows-1)*cols,cols*sizeof(double));
 
-  //detect no. lanes and form the  vector object
+  //detect no. lanes and form the std vector object
   using V = stdx::native_simd<double>;
   constexpr std::size_t LANES = V::size();
   const V v_half(0.5); //current cell
   const V v_eighth(0.125); //surrounding four
 
-
-#pragma omp parallel for schedule(static) if (rows > 256) //cmake 18-21
-    for (size_t i = 1; i < rows - 1; ++i) {
+  auto worker = [&](std::size_t begin, std::size_t end){ //wrap in a lambda to thread it
+    for (std::size_t i = 1; i < rows -1; ++i) {
       //calculate where the row starts
-      const double* __restrict__ r_top  = src + (i - 1) * stride;
-      const double* __restrict__ r_curr = src + i * stride;
-      const double* __restrict__ r_bot  = src + (i + 1) * stride;
-      double* __restrict__       r_dst  = dst + i * stride;
+      std::size_t row_start = i * cols;
+      std::size_t top_start = (i-1) * cols;
+      std::size_t bot_start = (i+1) * cols;
 
-
-      r_dst[0] = r_curr[0]; //copy the left boundary element
+      dst[row_start] = src[row_start]; //copy the left boundary element
       std::size_t j = 1;
-      //loop thru cols
+      //loop thru cols was
       for (; j + LANES <= cols-1; j += LANES) {
-        V c;      c.copy_from(r_curr + j, stdx::element_aligned);
-        V top;    top.copy_from(r_top + j, stdx::element_aligned);
-        V bot;    bot.copy_from(r_bot + j, stdx::element_aligned);
-        V left;   left.copy_from(r_curr + j - 1, stdx::element_aligned); //around the cell
-        V right;  right.copy_from(r_curr + j + 1, stdx::element_aligned);
+        V c;      c.copy_from(src + row_start + j, stdx::element_aligned);
+        V top;    top.copy_from(src + top_start + j, stdx::element_aligned);
+        V bot;    bot.copy_from(src + bot_start + j, stdx::element_aligned);
+        V left;   left.copy_from(src + row_start + j - 1, stdx::element_aligned); //around the cell
+        V right;  right.copy_from(src + row_start + j + 1, stdx::element_aligned);
 
         //0.5 * original + 0.125(top + bot + left + right)
-        V sum_neighbors = top + bot + left + right;
-        V res = v_half * c + v_eighth * sum_neighbors;
-        res.copy_to(r_dst + j, stdx::element_aligned);
+        V res = v_half * c + v_eighth * (top + bot + left + right);
+        res.copy_to(dst + row_start + j, stdx::element_aligned);
       }
       //Cleaner upper loop
       for (; j < cols-1; ++j) {
-        r_dst[j] = 0.5 * r_curr[j] +
-          0.125 * (r_top[j] + r_bot[j] + r_curr[j-1] + r_curr[j+1]);
+        dst[row_start + j] = 0.5 * src[row_start + j] +
+          0.125 * (src[top_start +j] + src[bot_start + j] + src[row_start + j-1] + src[row_start + j +1]);
       }
       //rightmost
-      r_dst[cols-1] = r_curr[cols-1];
+      dst[row_start + cols -1] = src[row_start + cols-1];
     }
 }
