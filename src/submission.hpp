@@ -16,8 +16,9 @@ class Grid {
 private:
   std::size_t rows_;
   std::size_t cols_;
-  std::size_t padded_cols_;
+  std::size_t stride_;
 
+  static constexpr std::size_t ALIGNMENT = 64; // assumption, to change as needed
   //flat
   std::vector<double> data_;
 
@@ -46,7 +47,7 @@ public:
   std::size_t cols() const { return cols_; }
 
   double* data() { return &data_[0]; }
-  const double* data() const { return &data_[0]; }
+  const double* data() const { return &data_[0]; }//ptr to start
 };  
 
 // Apply the five-point stencil over all interior points, copying the boundary
@@ -67,22 +68,23 @@ void apply_stencil(const Grid& old_grid, Grid& new_grid) {
   std::memcpy(dst,src, cols*sizeof(double)); //index 0
   std::memcpy(dst + (rows-1) * cols, src + (rows-1)*cols,cols*sizeof(double));
 
-  //detect no. lanes and form the std vector object
+  //detect no. lanes and form the  vector object
   using V = stdx::native_simd<double>;
   constexpr std::size_t LANES = V::size();
   const V v_half(0.5); //current cell
   const V v_eighth(0.125); //surrounding four
 
-#pragma omp parallel for schedule(static) //cmake 18-21
-    for (std::ptrdiff_t i = 1; i < static_cast<std::ptrdiff_t>(rows) - 1; ++i) {
+  //#pragma omp parallel for schedule(static) //cmake 18-21
+    for (size_t i = 1; i < rows - 1; ++i) {
       //calculate where the row starts
       std::size_t row_start = i * cols;
       std::size_t top_start = (i-1) * cols;
       std::size_t bot_start = (i+1) * cols;
 
+
       dst[row_start] = src[row_start]; //copy the left boundary element
       std::size_t j = 1;
-      //loop thru cols was
+      //loop thru cols
       for (; j + LANES <= cols-1; j += LANES) {
         V c;      c.copy_from(src + row_start + j, stdx::element_aligned);
         V top;    top.copy_from(src + top_start + j, stdx::element_aligned);
