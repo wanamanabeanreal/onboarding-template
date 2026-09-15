@@ -84,7 +84,7 @@ void apply_stencil(const Grid& old_grid, Grid& new_grid) {
   const std::size_t stride = old_grid.stride();
   //edge case for a grid with only boundaries
   if (rows <= 2 || cols <= 2) {
-    std::memcpy(new_grid.data(), old_grid.data(), rows*cols*sizeof(double));
+    std::memcpy(new_grid.data(), old_grid.data(), rows*stride*sizeof(double));
     return;
   }
   //unique location
