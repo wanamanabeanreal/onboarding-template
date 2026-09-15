@@ -101,7 +101,8 @@ void apply_stencil(const Grid& old_grid, Grid& new_grid) {
   const V v_half(0.5); //current cell
   const V v_eighth(0.125); //surrounding four
 
-#pragma omp parallel for schedule(static) if(rows > 256) //cmake 18-21
+
+#pragma omp parallel for schedule(static) if (rows > 256) //cmake 18-21
     for (size_t i = 1; i < rows - 1; ++i) {
       //calculate where the row starts
       const double* __restrict__ r_top  = src + (i - 1) * stride;
