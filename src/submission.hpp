@@ -73,7 +73,7 @@ void apply_stencil(const Grid& old_grid, Grid& new_grid) {
   const V v_half(0.5); //current cell
   const V v_eighth(0.125); //surrounding four
 
-  auto worker = [&](std::size_t begin, std::size_t end){ //wrap in a lambda to thread it
+#pragma omp parallel for schedule(static)
     for (std::size_t i = 1; i < rows -1; ++i) {
       //calculate where the row starts
       std::size_t row_start = i * cols;
@@ -102,4 +102,4 @@ void apply_stencil(const Grid& old_grid, Grid& new_grid) {
       //rightmost
       dst[row_start + cols -1] = src[row_start + cols-1];
     }
-}
+  }
