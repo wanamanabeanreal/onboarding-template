@@ -110,7 +110,7 @@ void apply_stencil(const Grid& old_grid, Grid& new_grid) {
       double* __restrict__       r_dst  = dst + i * stride;
 
 
-      r_dst[0] = r_curr[0] //copy the left boundary element
+      r_dst[0] = r_curr[0]; //copy the left boundary element
       std::size_t j = 1;
       //loop thru cols
       for (; j + LANES <= cols-1; j += LANES) {
