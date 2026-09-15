@@ -111,10 +111,12 @@ void apply_stencil(const Grid& old_grid, Grid& new_grid) {
       double* __restrict__       r_dst  = dst + i * stride;
 
 
-      r_dst[0] = r_curr[0]; //copy the left boundary element
-      std::size_t j = 1;
+
+      std::size_t j = 0;
       //loop thru cols
       for (; j + LANES <= cols-1; j += LANES) {
+        if (j == 0)
+          r_dst[0] = r_curr[0]; //copy the left boundary element
         V c;      c.copy_from(r_curr + j, stdx::vector_aligned);
         V top;    top.copy_from(r_top + j, stdx::vector_aligned);
         V bot;    bot.copy_from(r_bot + j, stdx::vector_aligned);
