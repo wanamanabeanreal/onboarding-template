@@ -47,59 +47,48 @@ public:
 
   double* data() { return &data_[0]; }
   const double* data() const { return &data_[0]; }
-};  
+};
 
-// Apply the five-point stencil over all interior points, copying the boundary
-// values unchanged from old_grid to new_grid. Implement your solution here.
 void apply_stencil(const Grid& old_grid, Grid& new_grid) {
   const std::size_t rows = old_grid.rows();
   const std::size_t cols = old_grid.cols();
-  //edge case for a grid with only boundaries
+
   if (rows <= 2 || cols <= 2) {
-    std::memcpy(new_grid.data(), old_grid.data(), rows*cols*sizeof(double));
+    std::memcpy(new_grid.data(), old_grid.data(), rows * cols * sizeof(double));
     return;
   }
-  //unique location
+
   const double* __restrict__ src = old_grid.data();
   double* __restrict__ dst = new_grid.data();
 
-  //copy boundaries(top/bottom)
-  std::memcpy(dst,src, cols*sizeof(double)); //index 0
-  std::memcpy(dst + (rows-1) * cols, src + (rows-1)*cols,cols*sizeof(double));
+  // Copy boundaries (top and bottom)
+  std::memcpy(dst, src, cols * sizeof(double));
+  std::memcpy(dst + (rows - 1) * cols, src + (rows - 1) * cols, cols * sizeof(double));
 
-  //detect no. lanes and form the std vector object
-  using V = stdx::native_simd<double>;
-  constexpr std::size_t LANES = V::size();
-  const V v_half(0.5); //current cell
-  const V v_eighth(0.125); //surrounding four
-
+  // Parallelize across rows
 #pragma omp parallel for schedule(static)
-    for (std::size_t i = 1; i < rows -1; ++i) {
-      //calculate where the row starts
-      std::size_t row_start = i * cols;
-      std::size_t top_start = (i-1) * cols;
-      std::size_t bot_start = (i+1) * cols;
+  for (std::size_t i = 1; i < rows - 1; ++i) {
+    const std::size_t row_start = i * cols;
+    const std::size_t top_start = (i - 1) * cols;
+    const std::size_t bot_start = (i + 1) * cols;
 
-      dst[row_start] = src[row_start]; //copy the left boundary element
-      std::size_t j = 1;
-      //loop thru cols was
-      for (; j + LANES <= cols-1; j += LANES) {
-        V c;      c.copy_from(src + row_start + j, stdx::element_aligned);
-        V top;    top.copy_from(src + top_start + j, stdx::element_aligned);
-        V bot;    bot.copy_from(src + bot_start + j, stdx::element_aligned);
-        V left;   left.copy_from(src + row_start + j - 1, stdx::element_aligned); //around the cell
-        V right;  right.copy_from(src + row_start + j + 1, stdx::element_aligned);
+    // left
+    dst[row_start] = src[row_start];
 
-        //0.5 * original + 0.125(top + bot + left + right)
-        V res = v_half * c + v_eighth * (top + bot + left + right);
-        res.copy_to(dst + row_start + j, stdx::element_aligned);
-      }
-      //Cleaner upper loop
-      for (; j < cols-1; ++j) {
-        dst[row_start + j] = 0.5 * src[row_start + j] +
-          0.125 * (src[top_start +j] + src[bot_start + j] + src[row_start + j-1] + src[row_start + j +1]);
-      }
-      //rightmost
-      dst[row_start + cols -1] = src[row_start + cols-1];
+    // restrict the current row's pointers
+    const double* __restrict__ r_top  = src + top_start;
+    const double* __restrict__ r_curr = src + row_start;
+    const double* __restrict__ r_bot  = src + bot_start;
+    double* __restrict__       r_dst  = dst + row_start;
+
+    // trying omp's simd
+#pragma omp simd
+    for (std::size_t j = 1; j < cols - 1; ++j) {
+      r_dst[j] = 0.5 * r_curr[j] +
+                 0.125 * (r_top[j] + r_bot[j] + r_curr[j - 1] + r_curr[j + 1]);
     }
+
+    // right
+    dst[row_start + cols - 1] = src[row_start + cols - 1];
   }
+}
