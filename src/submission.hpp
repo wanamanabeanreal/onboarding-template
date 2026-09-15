@@ -118,8 +118,8 @@ void apply_stencil(const Grid& old_grid, Grid& new_grid) {
         V c;      c.copy_from(r_curr + j, stdx::vector_aligned);
         V top;    top.copy_from(r_top + j, stdx::vector_aligned);
         V bot;    bot.copy_from(r_bot + j, stdx::vector_aligned);
-        V left;   left.copy_from(r_curr + j - 1, stdx::vector_aligned); //around the cell
-        V right;  right.copy_from(r_curr + j + 1, stdx::vector_aligned);
+        V left;   left.copy_from(r_curr + j - 1, stdx::element_aligned); //around the cell
+        V right;  right.copy_from(r_curr + j + 1, stdx::element_aligned);
 
         //0.5 * original + 0.125(top + bot + left + right)
         V sum_neighbors = top + bot + left + right;
